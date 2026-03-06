@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.system-monitor-jtourteau"
+          path="/org/gnome/shell/extensions/system-monitor-jtourteau/">
+
+    <key name="show-cpu" type="b">
+      <default>true</default>
+      <summary>Show CPU usage</summary>
+    </key>
+
+    <key name="show-ram" type="b">
+      <default>true</default>
+      <summary>Show RAM usage</summary>
+    </key>
+
+    <key name="show-temp" type="b">
+      <default>true</default>
+      <summary>Show CPU temperature</summary>
+    </key>
+
+    <key name="show-disk" type="b">
+      <default>true</default>
+      <summary>Show disk usage</summary>
+    </key>
+
+    <key name="show-disk-partitions" type="b">
+      <default>false</default>
+      <summary>Show per-partition disk details in popup</summary>
+    </key>
+
+    <key name="show-disk-io" type="b">
+      <default>true</default>
+      <summary>Show disk I/O throughput</summary>
+    </key>
+
+    <key name="show-disk-io-details" type="b">
+      <default>false</default>
+      <summary>Show per-device disk I/O in popup</summary>
+    </key>
+
+    <key name="show-net-io" type="b">
+      <default>true</default>
+      <summary>Show network I/O throughput</summary>
+    </key>
+
+    <key name="show-net-io-details" type="b">
+      <default>false</default>
+      <summary>Show per-interface network I/O in popup</summary>
+    </key>
+
+    <key name="show-gpu" type="b">
+      <default>true</default>
+      <summary>Show GPU info</summary>
+    </key>
+
+    <key name="show-power" type="b">
+      <default>true</default>
+      <summary>Show power/energy info</summary>
+    </key>
+
+    <key name="show-cpu-per-core" type="b">
+      <default>false</default>
+      <summary>Show per-core CPU details in popup</summary>
+    </key>
+
+    <key name="show-ram-details" type="b">
+      <default>false</default>
+      <summary>Show detailed RAM info in popup</summary>
+    </key>
+
+    <key name="update-interval" type="i">
+      <default>2</default>
+      <summary>Update interval in seconds</summary>
+    </key>
+
+  </schema>
+</schemalist>

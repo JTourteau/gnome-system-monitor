@@ -1,0 +1,9 @@
+{
+    "name": "System Monitor",
+    "description": "Real-time system resource monitoring in the top bar — CPU, RAM, temperature, disk usage & I/O, network I/O, GPU, and power/energy tracking",
+    "uuid": "system-monitor@jtourteau",
+    "shell-version": ["45", "46", "47", "48"],
+    "version": 1,
+    "url": "https://github.com/JTourteau/gnome-system-monitor",
+    "settings-schema": "org.gnome.shell.extensions.system-monitor-jtourteau"
+}
