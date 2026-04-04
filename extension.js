@@ -574,15 +574,33 @@ export default class SystemMonitorExtension extends Extension {
         }
 
         // Destroy menu item collections
-        for (const name of [
-            '_menuCpuCoreItems', '_menuRamDetailItems', '_menuDiskPartItems',
-            '_menuIODeviceItems', '_menuNetIfaceItems', '_menuGpuItems', '_menuPowerItems',
-        ]) {
-            if (this[name]) {
-                for (const item of this[name])
-                    item?.destroy();
-                this[name] = null;
-            }
+        if (this._menuCpuCoreItems) {
+            for (const item of this._menuCpuCoreItems) item?.destroy();
+            this._menuCpuCoreItems = null;
+        }
+        if (this._menuRamDetailItems) {
+            for (const item of this._menuRamDetailItems) item?.destroy();
+            this._menuRamDetailItems = null;
+        }
+        if (this._menuDiskPartItems) {
+            for (const item of this._menuDiskPartItems) item?.destroy();
+            this._menuDiskPartItems = null;
+        }
+        if (this._menuIODeviceItems) {
+            for (const item of this._menuIODeviceItems) item?.destroy();
+            this._menuIODeviceItems = null;
+        }
+        if (this._menuNetIfaceItems) {
+            for (const item of this._menuNetIfaceItems) item?.destroy();
+            this._menuNetIfaceItems = null;
+        }
+        if (this._menuGpuItems) {
+            for (const item of this._menuGpuItems) item?.destroy();
+            this._menuGpuItems = null;
+        }
+        if (this._menuPowerItems) {
+            for (const item of this._menuPowerItems) item?.destroy();
+            this._menuPowerItems = null;
         }
 
         if (this._scrollView) {
