@@ -16,8 +16,8 @@ uninstall:
 	rm -rf $(INSTALL_DIR)
 	@echo "Uninstalled."
 
-zip: schemas
-	zip -r $(UUID).zip $(FILES)
+zip:
+	zip -r $(UUID).zip $(FILES) -x "schemas/gschemas.compiled"
 	@echo "Created $(UUID).zip"
 
 clean:

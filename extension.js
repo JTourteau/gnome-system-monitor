@@ -9,14 +9,36 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
+// --- Async file helpers ---
+
+function _loadFileAsync(path) {
+    return new Promise((resolve) => {
+        const file = Gio.File.new_for_path(path);
+        file.load_contents_async(null, (source, result) => {
+            try {
+                const [ok, contents] = source.load_contents_finish(result);
+                resolve(ok ? new TextDecoder().decode(contents) : null);
+            } catch (_e) {
+                resolve(null);
+            }
+        });
+    });
+}
+
+async function _readIntFile(path) {
+    const text = await _loadFileAsync(path);
+    if (!text) return -1;
+    const val = parseInt(text.trim());
+    return isNaN(val) ? -1 : val;
+}
+
 // --- Resource readers ---
 
-function readAllCpuTimes() {
-    const contents = GLib.file_get_contents('/proc/stat');
-    if (!contents[0]) return null;
+async function readAllCpuTimes() {
+    const text = await _loadFileAsync('/proc/stat');
+    if (!text) return null;
 
-    const decoder = new TextDecoder();
-    const lines = decoder.decode(contents[1]).split('\n');
+    const lines = text.split('\n');
     const results = [];
 
     for (const line of lines) {
@@ -38,12 +60,10 @@ function getCpuUsage(prev, curr) {
     return Math.round(((totalDiff - idleDiff) / totalDiff) * 100);
 }
 
-function getMemoryInfo() {
-    const contents = GLib.file_get_contents('/proc/meminfo');
-    if (!contents[0]) return { percent: 0, used: 0, total: 0 };
+async function getMemoryInfo() {
+    const text = await _loadFileAsync('/proc/meminfo');
+    if (!text) return { percent: 0, used: 0, total: 0 };
 
-    const decoder = new TextDecoder();
-    const text = decoder.decode(contents[1]);
     const getValue = (key) => {
         const match = text.match(new RegExp(`${key}:\\s+(\\d+)`));
         return match ? parseInt(match[1]) : 0;
@@ -76,12 +96,11 @@ function getMemoryInfo() {
     };
 }
 
-function getDiskInfo() {
-    const contents = GLib.file_get_contents('/proc/mounts');
-    if (!contents[0]) return { percent: 0, partitions: [] };
+async function getDiskInfo() {
+    const text = await _loadFileAsync('/proc/mounts');
+    if (!text) return { percent: 0, partitions: [] };
 
-    const decoder = new TextDecoder();
-    const lines = decoder.decode(contents[1]).split('\n');
+    const lines = text.split('\n');
     const validFs = ['ext2', 'ext3', 'ext4', 'btrfs', 'xfs', 'ntfs', 'vfat', 'fuseblk', 'f2fs', 'zfs'];
     const seen = new Set();
     const partitions = [];
@@ -126,12 +145,11 @@ function getDiskInfo() {
     return { percent, partitions };
 }
 
-function readDiskIO() {
-    const contents = GLib.file_get_contents('/proc/diskstats');
-    if (!contents[0]) return {};
+async function readDiskIO() {
+    const text = await _loadFileAsync('/proc/diskstats');
+    if (!text) return {};
 
-    const decoder = new TextDecoder();
-    const lines = decoder.decode(contents[1]).split('\n');
+    const lines = text.split('\n');
     const devices = {};
 
     for (const line of lines) {
@@ -185,12 +203,11 @@ function formatBytesShort(bytes) {
     return `${(bytes / 1073741824).toFixed(1)} G`;
 }
 
-function readNetIO() {
-    const contents = GLib.file_get_contents('/proc/net/dev');
-    if (!contents[0]) return {};
+async function readNetIO() {
+    const text = await _loadFileAsync('/proc/net/dev');
+    if (!text) return {};
 
-    const decoder = new TextDecoder();
-    const lines = decoder.decode(contents[1]).split('\n').slice(2); // skip headers
+    const lines = text.split('\n').slice(2); // skip headers
     const interfaces = {};
 
     for (const line of lines) {
@@ -226,7 +243,7 @@ function getNetIORate(prev, curr, intervalSec) {
     return { totalRx, totalTx, interfaces };
 }
 
-function getCpuTemp() {
+async function getCpuTemp() {
     const hwmonBase = '/sys/class/hwmon';
     try {
         const dir = Gio.File.new_for_path(hwmonBase);
@@ -237,19 +254,12 @@ function getCpuTemp() {
         let info;
         while ((info = enumerator.next_file(null)) !== null) {
             const hwmonPath = `${hwmonBase}/${info.get_name()}`;
-            const namePath = `${hwmonPath}/name`;
-            const nameContents = GLib.file_get_contents(namePath);
-            if (nameContents[0]) {
-                const decoder = new TextDecoder();
-                const name = decoder.decode(nameContents[1]).trim();
+            const nameText = await _loadFileAsync(`${hwmonPath}/name`);
+            if (nameText) {
+                const name = nameText.trim();
                 if (['coretemp', 'k10temp', 'zenpower', 'it8728', 'nct6775', 'acpitz'].includes(name)) {
-                    const tempPath = `${hwmonPath}/temp1_input`;
-                    const tempContents = GLib.file_get_contents(tempPath);
-                    if (tempContents[0]) {
-                        const decoder2 = new TextDecoder();
-                        const temp = parseInt(decoder2.decode(tempContents[1]).trim());
-                        return Math.round(temp / 1000);
-                    }
+                    const temp = await _readIntFile(`${hwmonPath}/temp1_input`);
+                    if (temp > 0) return Math.round(temp / 1000);
                 }
             }
         }
@@ -258,17 +268,8 @@ function getCpuTemp() {
     }
 
     for (let i = 0; i < 10; i++) {
-        const path = `/sys/class/thermal/thermal_zone${i}/temp`;
-        try {
-            const contents = GLib.file_get_contents(path);
-            if (contents[0]) {
-                const decoder = new TextDecoder();
-                const temp = parseInt(decoder.decode(contents[1]).trim());
-                if (temp > 0) return Math.round(temp / 1000);
-            }
-        } catch (_e) {
-            continue;
-        }
+        const temp = await _readIntFile(`/sys/class/thermal/thermal_zone${i}/temp`);
+        if (temp > 0) return Math.round(temp / 1000);
     }
 
     return -1;
@@ -276,16 +277,16 @@ function getCpuTemp() {
 
 // --- GPU ---
 
-function getGpuInfo(cachedNvidia) {
+async function getGpuInfo(cachedNvidia) {
     // Try NVIDIA first (uses cached async result)
     if (cachedNvidia) return cachedNvidia;
 
     // Try Intel
-    const intel = _getIntelGpu();
+    const intel = await _getIntelGpu();
     if (intel) return intel;
 
     // Try AMD
-    const amd = _getAmdGpu();
+    const amd = await _getAmdGpu();
     if (amd) return amd;
 
     return null;
@@ -333,7 +334,7 @@ function _fetchNvidiaGpuAsync(callback) {
     }
 }
 
-function _getIntelGpu() {
+async function _getIntelGpu() {
     // Frequency-based "usage" estimate for Intel iGPU
     const freqPaths = [
         '/sys/class/drm/card0/gt/gt0/rps_cur_freq_mhz',
@@ -346,11 +347,11 @@ function _getIntelGpu() {
 
     let curFreq = -1, maxFreq = -1;
     for (const p of freqPaths) {
-        const v = _readIntFile(p);
+        const v = await _readIntFile(p);
         if (v >= 0) { curFreq = v; break; }
     }
     for (const p of maxPaths) {
-        const v = _readIntFile(p);
+        const v = await _readIntFile(p);
         if (v >= 0) { maxFreq = v; break; }
     }
 
@@ -369,7 +370,7 @@ function _getIntelGpu() {
     };
 }
 
-function _getAmdGpu() {
+async function _getAmdGpu() {
     // AMD discrete GPU via hwmon
     const hwmonBase = '/sys/class/hwmon';
     try {
@@ -380,24 +381,22 @@ function _getAmdGpu() {
         let info;
         while ((info = enumerator.next_file(null)) !== null) {
             const hwmonPath = `${hwmonBase}/${info.get_name()}`;
-            const nameContents = GLib.file_get_contents(`${hwmonPath}/name`);
-            if (!nameContents[0]) continue;
-            const decoder = new TextDecoder();
-            const name = decoder.decode(nameContents[1]).trim();
+            const nameText = await _loadFileAsync(`${hwmonPath}/name`);
+            if (!nameText) continue;
+            const name = nameText.trim();
             if (name !== 'amdgpu') continue;
 
-            const temp = _readIntFile(`${hwmonPath}/temp1_input`);
-            const power = _readIntFile(`${hwmonPath}/power1_average`);
+            const temp = await _readIntFile(`${hwmonPath}/temp1_input`);
+            const power = await _readIntFile(`${hwmonPath}/power1_average`);
 
             // Try to get usage from /sys/class/drm
             let usage = -1;
-            const busyPath = '/sys/class/drm/card0/device/gpu_busy_percent';
-            const busyVal = _readIntFile(busyPath);
+            const busyVal = await _readIntFile('/sys/class/drm/card0/device/gpu_busy_percent');
             if (busyVal >= 0) usage = busyVal;
 
             // VRAM
-            const vramUsed = _readIntFile('/sys/class/drm/card0/device/mem_info_vram_used');
-            const vramTotal = _readIntFile('/sys/class/drm/card0/device/mem_info_vram_total');
+            const vramUsed = await _readIntFile('/sys/class/drm/card0/device/mem_info_vram_used');
+            const vramTotal = await _readIntFile('/sys/class/drm/card0/device/mem_info_vram_total');
 
             return {
                 name: 'AMD GPU',
@@ -416,9 +415,9 @@ function _getAmdGpu() {
 
 // --- Energy (Intel RAPL + Battery) ---
 
-function readRaplEnergy() {
+async function readRaplEnergy() {
     // Returns energy in microjoules, or -1 if unavailable
-    return _readIntFile('/sys/class/powercap/intel-rapl:0/energy_uj');
+    return await _readIntFile('/sys/class/powercap/intel-rapl:0/energy_uj');
 }
 
 function getRaplPower(prevEnergy, currEnergy, maxRange, intervalSec) {
@@ -429,42 +428,28 @@ function getRaplPower(prevEnergy, currEnergy, maxRange, intervalSec) {
     return delta / (intervalSec * 1000000); // watts
 }
 
-function getBatteryInfo() {
+async function getBatteryInfo() {
     const base = '/sys/class/power_supply/BAT0';
-    const capacity = _readIntFile(`${base}/capacity`);
+    const capacity = await _readIntFile(`${base}/capacity`);
     if (capacity < 0) return null;
 
-    const statusContents = GLib.file_get_contents(`${base}/status`);
+    const statusText = await _loadFileAsync(`${base}/status`);
     let status = 'Unknown';
-    if (statusContents[0]) {
-        const decoder = new TextDecoder();
-        status = decoder.decode(statusContents[1]).trim();
-    }
+    if (statusText) status = statusText.trim();
 
     // Try power_now (microwatts) first, then compute from voltage*current
     let powerW = -1;
-    const powerNow = _readIntFile(`${base}/power_now`);
+    const powerNow = await _readIntFile(`${base}/power_now`);
     if (powerNow > 0) {
         powerW = powerNow / 1000000;
     } else {
-        const voltage = _readIntFile(`${base}/voltage_now`);
-        const current = _readIntFile(`${base}/current_now`);
+        const voltage = await _readIntFile(`${base}/voltage_now`);
+        const current = await _readIntFile(`${base}/current_now`);
         if (voltage > 0 && current > 0)
             powerW = (voltage * current) / 1000000000000; // uV * uA -> W
     }
 
     return { capacity, status, power: powerW };
-}
-
-function _readIntFile(path) {
-    try {
-        const contents = GLib.file_get_contents(path);
-        if (!contents[0]) return -1;
-        const decoder = new TextDecoder();
-        return parseInt(decoder.decode(contents[1]).trim());
-    } catch (_e) {
-        return -1;
-    }
 }
 
 function formatTemp(temp) {
@@ -487,18 +472,16 @@ function getUsageColor(percent) {
 // --- Extension ---
 
 export default class SystemMonitorExtension extends Extension {
-    _indicator = null;
-    _timerId = null;
-    _prevCpuAll = null;
-    _settings = null;
-
     enable() {
         this._settings = this.getSettings();
-        this._prevCpuAll = readAllCpuTimes();
-        this._prevDiskIO = readDiskIO();
-        this._prevNetIO = readNetIO();
-        this._prevRaplEnergy = readRaplEnergy();
-        this._raplMaxRange = _readIntFile('/sys/class/powercap/intel-rapl:0/max_energy_range_uj');
+        this._prevCpuAll = null;
+        this._prevDiskIO = null;
+        this._prevNetIO = null;
+        this._prevRaplEnergy = -1;
+        this._raplMaxRange = -1;
+        this._raplMaxRangeLoaded = false;
+        this._cachedNvidia = null;
+        this._updating = false;
 
         this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
 
@@ -580,18 +563,71 @@ export default class SystemMonitorExtension extends Extension {
     disable() {
         this._stopTimer();
 
+        if (this._menuOpenStateId && this._indicator) {
+            this._indicator.menu.disconnect(this._menuOpenStateId);
+            this._menuOpenStateId = null;
+        }
+
         if (this._settingsChangedId) {
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = null;
         }
 
+        // Destroy menu item collections
+        for (const name of [
+            '_menuCpuCoreItems', '_menuRamDetailItems', '_menuDiskPartItems',
+            '_menuIODeviceItems', '_menuNetIfaceItems', '_menuGpuItems', '_menuPowerItems',
+        ]) {
+            if (this[name]) {
+                for (const item of this[name])
+                    item?.destroy();
+                this[name] = null;
+            }
+        }
+
+        if (this._scrollView) {
+            this._scrollView.destroy();
+            this._scrollView = null;
+        }
+
         this._indicator?.destroy();
         this._indicator = null;
+        this._box = null;
+        this._cpuLabel = null;
+        this._ramLabel = null;
+        this._tempLabel = null;
+        this._diskLabel = null;
+        this._ioLabel = null;
+        this._netLabel = null;
+        this._gpuLabel = null;
+        this._powerLabel = null;
+        this._menuCpuItem = null;
+        this._menuRamItem = null;
+        this._menuTempItem = null;
+        this._menuDiskItem = null;
+        this._menuIOReadItem = null;
+        this._menuIOWriteItem = null;
+        this._menuNetRxItem = null;
+        this._menuNetTxItem = null;
         this._settings = null;
         this._prevCpuAll = null;
         this._prevDiskIO = null;
         this._prevNetIO = null;
         this._prevRaplEnergy = null;
+        this._raplMaxRange = null;
+        this._raplMaxRangeLoaded = null;
+        this._cachedNvidia = null;
+        this._lastCpuOverall = null;
+        this._lastCpuPerCore = null;
+        this._lastMem = null;
+        this._lastTemp = null;
+        this._lastDisk = null;
+        this._lastIO = null;
+        this._lastNet = null;
+        this._lastGpu = null;
+        this._lastRaplPower = null;
+        this._lastBattery = null;
+        this._updating = null;
     }
 
     _updateVisibility() {
@@ -624,7 +660,7 @@ export default class SystemMonitorExtension extends Extension {
         parent.add_child(this._scrollView);
 
         // Set max-height based on monitor when menu opens
-        menu.connect('open-state-changed', (_menu, isOpen) => {
+        this._menuOpenStateId = menu.connect('open-state-changed', (_menu, isOpen) => {
             if (isOpen) {
                 const monitor = Main.layoutManager.primaryMonitor;
                 const panelHeight = Main.panel.height;
@@ -810,124 +846,149 @@ export default class SystemMonitorExtension extends Extension {
         }
     }
 
-    _update() {
-        // CPU (all cores)
-        const currCpuAll = readAllCpuTimes();
-        this._lastCpuPerCore = [];
-        if (this._prevCpuAll && currCpuAll) {
-            this._lastCpuOverall = getCpuUsage(this._prevCpuAll[0], currCpuAll[0]);
-            for (let i = 1; i < currCpuAll.length; i++) {
-                const prev = this._prevCpuAll[i];
-                const curr = currCpuAll[i];
-                this._lastCpuPerCore.push(prev ? getCpuUsage(prev, curr) : 0);
+    async _update() {
+        if (this._updating || !this._indicator) return;
+        this._updating = true;
+
+        try {
+            // Load RAPL max range once
+            if (!this._raplMaxRangeLoaded) {
+                this._raplMaxRange = await _readIntFile('/sys/class/powercap/intel-rapl:0/max_energy_range_uj');
+                this._raplMaxRangeLoaded = true;
             }
-        } else {
-            this._lastCpuOverall = 0;
+
+            // Fetch all data in parallel
+            const [currCpuAll, mem, temp, disk, currDiskIO, currNetIO, currRapl, batt, gpu] = await Promise.all([
+                readAllCpuTimes(),
+                getMemoryInfo(),
+                getCpuTemp(),
+                getDiskInfo(),
+                readDiskIO(),
+                readNetIO(),
+                readRaplEnergy(),
+                getBatteryInfo(),
+                getGpuInfo(this._cachedNvidia),
+            ]);
+
+            // Check if extension was disabled during async work
+            if (!this._indicator) return;
+
+            // CPU (all cores)
+            this._lastCpuPerCore = [];
+            if (this._prevCpuAll && currCpuAll) {
+                this._lastCpuOverall = getCpuUsage(this._prevCpuAll[0], currCpuAll[0]);
+                for (let i = 1; i < currCpuAll.length; i++) {
+                    const prev = this._prevCpuAll[i];
+                    const curr = currCpuAll[i];
+                    this._lastCpuPerCore.push(prev ? getCpuUsage(prev, curr) : 0);
+                }
+            } else {
+                this._lastCpuOverall = 0;
+            }
+            this._prevCpuAll = currCpuAll;
+
+            // RAM
+            this._lastMem = mem;
+
+            // Temperature
+            this._lastTemp = temp;
+
+            // Disk
+            this._lastDisk = disk;
+
+            // Disk I/O
+            const interval = this._settings.get_int('update-interval');
+            this._lastIO = getDiskIORate(this._prevDiskIO, currDiskIO, interval);
+            this._prevDiskIO = currDiskIO;
+
+            // Network I/O
+            this._lastNet = getNetIORate(this._prevNetIO, currNetIO, interval);
+            this._prevNetIO = currNetIO;
+
+            // GPU (fire off NVIDIA fetch for next tick)
+            _fetchNvidiaGpuAsync((nvidiaResult) => {
+                this._cachedNvidia = nvidiaResult;
+            });
+            this._lastGpu = gpu;
+
+            // Power (RAPL + Battery)
+            this._lastRaplPower = getRaplPower(
+                this._prevRaplEnergy, currRapl, this._raplMaxRange, interval
+            );
+            this._prevRaplEnergy = currRapl;
+            this._lastBattery = batt;
+
+            // Check again after all computation
+            if (!this._indicator) return;
+
+            // Update top bar labels
+            const cpu = this._lastCpuOverall;
+            const io = this._lastIO;
+            const net = this._lastNet;
+
+            this._cpuLabel.text = `CPU: ${cpu}%`;
+            this._cpuLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(cpu)};`;
+
+            this._ramLabel.text = `RAM: ${mem.percent}%`;
+            this._ramLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(mem.percent)};`;
+
+            this._tempLabel.text = `${formatTemp(temp)}`;
+            this._tempLabel.style = `font-size: 11px; padding: 0 4px; color: ${getTempColor(temp)};`;
+
+            this._diskLabel.text = `DISK: ${disk.percent}%`;
+            this._diskLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(disk.percent)};`;
+
+            this._ioLabel.text = `R: ${formatBytesShort(io.totalRead)}/s W: ${formatBytesShort(io.totalWrite)}/s`;
+            this._ioLabel.style = 'font-size: 11px; padding: 0 4px; color: #99c1f1;';
+
+            this._netLabel.text = `\u2193 ${formatBytesShort(net.totalRx)}/s \u2191 ${formatBytesShort(net.totalTx)}/s`;
+            this._netLabel.style = 'font-size: 11px; padding: 0 4px; color: #cdab8f;';
+
+            if (gpu && gpu.usage >= 0) {
+                this._gpuLabel.text = `GPU: ${gpu.usage}%`;
+                this._gpuLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(gpu.usage)};`;
+            } else if (gpu && gpu.freqCur >= 0) {
+                this._gpuLabel.text = `GPU: ${gpu.freqCur} MHz`;
+                this._gpuLabel.style = 'font-size: 11px; padding: 0 4px; color: #c061cb;';
+            } else {
+                this._gpuLabel.text = 'GPU: N/A';
+                this._gpuLabel.style = 'font-size: 11px; padding: 0 4px; color: #888888;';
+            }
+
+            // Power (RAPL + Battery)
+            const raplW = this._lastRaplPower;
+            if (raplW >= 0) {
+                this._powerLabel.text = `${raplW.toFixed(1)} W`;
+                const pwrColor = raplW < 15 ? '#8ff0a4' : raplW < 35 ? '#f9f06b' : '#ff7b63';
+                this._powerLabel.style = `font-size: 11px; padding: 0 4px; color: ${pwrColor};`;
+            } else if (batt && batt.power > 0) {
+                this._powerLabel.text = `${batt.power.toFixed(1)} W`;
+                this._powerLabel.style = 'font-size: 11px; padding: 0 4px; color: #f9f06b;';
+            } else if (batt) {
+                this._powerLabel.text = `BAT: ${batt.capacity}%`;
+                this._powerLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(100 - batt.capacity)};`;
+            } else {
+                this._powerLabel.text = 'PWR: N/A';
+                this._powerLabel.style = 'font-size: 11px; padding: 0 4px; color: #888888;';
+            }
+
+            // Rebuild menu if partition/device/interface count changed
+            const needRebuild =
+                (this._settings.get_boolean('show-disk-partitions') &&
+                    this._menuDiskPartItems.length !== disk.partitions.length) ||
+                (this._settings.get_boolean('show-disk-io-details') &&
+                    this._menuIODeviceItems.length !== io.devices.length) ||
+                (this._settings.get_boolean('show-net-io-details') &&
+                    this._menuNetIfaceItems.length !== net.interfaces.length);
+            if (needRebuild) {
+                this._rebuildMenu();
+                return;
+            }
+
+            this._updateMenuItems();
+        } finally {
+            this._updating = false;
         }
-        this._prevCpuAll = currCpuAll;
-
-        // RAM
-        this._lastMem = getMemoryInfo();
-
-        // Temperature
-        this._lastTemp = getCpuTemp();
-
-        // Disk
-        this._lastDisk = getDiskInfo();
-
-        // Disk I/O
-        const currDiskIO = readDiskIO();
-        const interval = this._settings.get_int('update-interval');
-        this._lastIO = getDiskIORate(this._prevDiskIO, currDiskIO, interval);
-        this._prevDiskIO = currDiskIO;
-
-        // Update top bar labels
-        const cpu = this._lastCpuOverall;
-        const mem = this._lastMem;
-        const temp = this._lastTemp;
-        const disk = this._lastDisk;
-        const io = this._lastIO;
-
-        this._cpuLabel.text = `CPU: ${cpu}%`;
-        this._cpuLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(cpu)};`;
-
-        this._ramLabel.text = `RAM: ${mem.percent}%`;
-        this._ramLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(mem.percent)};`;
-
-        this._tempLabel.text = `${formatTemp(temp)}`;
-        this._tempLabel.style = `font-size: 11px; padding: 0 4px; color: ${getTempColor(temp)};`;
-
-        this._diskLabel.text = `DISK: ${disk.percent}%`;
-        this._diskLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(disk.percent)};`;
-
-        this._ioLabel.text = `R: ${formatBytesShort(io.totalRead)}/s W: ${formatBytesShort(io.totalWrite)}/s`;
-        this._ioLabel.style = 'font-size: 11px; padding: 0 4px; color: #99c1f1;';
-
-        // Network I/O
-        const currNetIO = readNetIO();
-        this._lastNet = getNetIORate(this._prevNetIO, currNetIO, interval);
-        this._prevNetIO = currNetIO;
-        const net = this._lastNet;
-
-        this._netLabel.text = `\u2193 ${formatBytesShort(net.totalRx)}/s \u2191 ${formatBytesShort(net.totalTx)}/s`;
-        this._netLabel.style = 'font-size: 11px; padding: 0 4px; color: #cdab8f;';
-
-        // GPU (NVIDIA is fetched async, uses cached result)
-        _fetchNvidiaGpuAsync((nvidiaResult) => {
-            this._cachedNvidia = nvidiaResult;
-        });
-        this._lastGpu = getGpuInfo(this._cachedNvidia);
-        const gpu = this._lastGpu;
-        if (gpu && gpu.usage >= 0) {
-            this._gpuLabel.text = `GPU: ${gpu.usage}%`;
-            this._gpuLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(gpu.usage)};`;
-        } else if (gpu && gpu.freqCur >= 0) {
-            this._gpuLabel.text = `GPU: ${gpu.freqCur} MHz`;
-            this._gpuLabel.style = 'font-size: 11px; padding: 0 4px; color: #c061cb;';
-        } else {
-            this._gpuLabel.text = 'GPU: N/A';
-            this._gpuLabel.style = 'font-size: 11px; padding: 0 4px; color: #888888;';
-        }
-
-        // Power (RAPL + Battery)
-        const currRapl = readRaplEnergy();
-        this._lastRaplPower = getRaplPower(
-            this._prevRaplEnergy, currRapl, this._raplMaxRange, interval
-        );
-        this._prevRaplEnergy = currRapl;
-        this._lastBattery = getBatteryInfo();
-
-        const raplW = this._lastRaplPower;
-        const batt = this._lastBattery;
-        if (raplW >= 0) {
-            this._powerLabel.text = `${raplW.toFixed(1)} W`;
-            const pwrColor = raplW < 15 ? '#8ff0a4' : raplW < 35 ? '#f9f06b' : '#ff7b63';
-            this._powerLabel.style = `font-size: 11px; padding: 0 4px; color: ${pwrColor};`;
-        } else if (batt && batt.power > 0) {
-            this._powerLabel.text = `${batt.power.toFixed(1)} W`;
-            this._powerLabel.style = 'font-size: 11px; padding: 0 4px; color: #f9f06b;';
-        } else if (batt) {
-            this._powerLabel.text = `BAT: ${batt.capacity}%`;
-            this._powerLabel.style = `font-size: 11px; padding: 0 4px; color: ${getUsageColor(100 - batt.capacity)};`;
-        } else {
-            this._powerLabel.text = 'PWR: N/A';
-            this._powerLabel.style = 'font-size: 11px; padding: 0 4px; color: #888888;';
-        }
-
-        // Rebuild menu if partition/device/interface count changed
-        const needRebuild =
-            (this._settings.get_boolean('show-disk-partitions') &&
-                this._menuDiskPartItems.length !== disk.partitions.length) ||
-            (this._settings.get_boolean('show-disk-io-details') &&
-                this._menuIODeviceItems.length !== io.devices.length) ||
-            (this._settings.get_boolean('show-net-io-details') &&
-                this._menuNetIfaceItems.length !== net.interfaces.length);
-        if (needRebuild) {
-            this._rebuildMenu();
-            return;
-        }
-
-        this._updateMenuItems();
     }
 
     _updateMenuItems() {
