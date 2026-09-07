@@ -1,6 +1,6 @@
 UUID = system-monitor@jtourteau
 INSTALL_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
-FILES = extension.js prefs.js metadata.json schemas/
+FILES = extension.js prefs.js metadata.json lib/ schemas/
 
 .PHONY: install uninstall zip schemas clean
 
@@ -13,7 +13,7 @@ install: schemas
 	@echo "Installed. Restart GNOME Shell and run: gnome-extensions enable $(UUID)"
 
 uninstall:
-	rm -rf $(INSTALL_DIR)
+	-trash $(INSTALL_DIR)
 	@echo "Uninstalled."
 
 zip:
@@ -21,5 +21,5 @@ zip:
 	@echo "Created $(UUID).zip"
 
 clean:
-	rm -f $(UUID).zip
-	rm -f schemas/gschemas.compiled
+	-trash $(UUID).zip
+	-trash schemas/gschemas.compiled

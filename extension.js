@@ -9,6 +9,17 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {
+    parseCpuTimes,
+    parseMeminfo,
+    parseDiskIO, getDiskIORate,
+    parseNetIO, getNetIORate,
+    getCpuUsage,
+    formatBytes, formatBytesShort,
+    parseNvidiaOutput, getRaplPower,
+    formatTemp, getTempColor, getUsageColor,
+} from './lib/metrics.js';
+
 // --- Async file helpers ---
 
 function _loadFileAsync(path) {
@@ -36,64 +47,12 @@ async function _readIntFile(path) {
 
 async function readAllCpuTimes() {
     const text = await _loadFileAsync('/proc/stat');
-    if (!text) return null;
-
-    const lines = text.split('\n');
-    const results = [];
-
-    for (const line of lines) {
-        if (!line.startsWith('cpu')) break;
-        const parts = line.split(/\s+/).slice(1).map(Number);
-        const idle = parts[3] + (parts[4] || 0);
-        const total = parts.reduce((a, b) => a + b, 0);
-        results.push({ idle, total });
-    }
-
-    return results; // [0] = overall, [1..N] = per-core
-}
-
-function getCpuUsage(prev, curr) {
-    if (!prev || !curr) return 0;
-    const totalDiff = curr.total - prev.total;
-    const idleDiff = curr.idle - prev.idle;
-    if (totalDiff === 0) return 0;
-    return Math.round(((totalDiff - idleDiff) / totalDiff) * 100);
+    return parseCpuTimes(text); // [0] = overall, [1..N] = per-core
 }
 
 async function getMemoryInfo() {
     const text = await _loadFileAsync('/proc/meminfo');
-    if (!text) return { percent: 0, used: 0, total: 0 };
-
-    const getValue = (key) => {
-        const match = text.match(new RegExp(`${key}:\\s+(\\d+)`));
-        return match ? parseInt(match[1]) : 0;
-    };
-
-    const total = getValue('MemTotal');
-    const free = getValue('MemFree');
-    const available = getValue('MemAvailable');
-    const buffers = getValue('Buffers');
-    const cached = getValue('Cached');
-    const swapTotal = getValue('SwapTotal');
-    const swapFree = getValue('SwapFree');
-
-    const used = total - available;
-    const percent = Math.round((used / total) * 100);
-    const swapUsed = swapTotal - swapFree;
-    const swapPercent = swapTotal > 0 ? Math.round((swapUsed / swapTotal) * 100) : 0;
-
-    const toGB = (kb) => (kb / 1048576).toFixed(1);
-
-    return {
-        percent,
-        used: toGB(used),
-        total: toGB(total),
-        free: toGB(free),
-        cached: toGB(cached + buffers),
-        swapUsed: toGB(swapUsed),
-        swapTotal: toGB(swapTotal),
-        swapPercent,
-    };
+    return parseMeminfo(text);
 }
 
 async function getDiskInfo() {
@@ -147,100 +106,12 @@ async function getDiskInfo() {
 
 async function readDiskIO() {
     const text = await _loadFileAsync('/proc/diskstats');
-    if (!text) return {};
-
-    const lines = text.split('\n');
-    const devices = {};
-
-    for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 14) continue;
-        const name = parts[2];
-        // Only whole disks (e.g. nvme0n1, sda) not partitions
-        if (/\d+$/.test(name) && !name.startsWith('nvme')) continue;
-        if (/p\d+$/.test(name)) continue; // skip nvme partitions
-        if (name.startsWith('dm-') || name.startsWith('loop') || name.startsWith('sr')) continue;
-
-        // Fields: sectors read (index 5), sectors written (index 9), sector = 512 bytes
-        const sectorsRead = parseInt(parts[5]);
-        const sectorsWritten = parseInt(parts[9]);
-        devices[name] = { read: sectorsRead * 512, written: sectorsWritten * 512 };
-    }
-
-    return devices;
-}
-
-function getDiskIORate(prev, curr, intervalSec) {
-    if (!prev || !curr) return { totalRead: 0, totalWrite: 0, devices: [] };
-
-    let totalRead = 0;
-    let totalWrite = 0;
-    const devices = [];
-
-    for (const name of Object.keys(curr)) {
-        if (!prev[name]) continue;
-        const readRate = (curr[name].read - prev[name].read) / intervalSec;
-        const writeRate = (curr[name].written - prev[name].written) / intervalSec;
-        totalRead += readRate;
-        totalWrite += writeRate;
-        devices.push({ name, read: readRate, write: writeRate });
-    }
-
-    return { totalRead, totalWrite, devices };
-}
-
-function formatBytes(bytes) {
-    if (bytes < 1024) return `${Math.round(bytes)} B/s`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB/s`;
-    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB/s`;
-    return `${(bytes / 1073741824).toFixed(1)} GB/s`;
-}
-
-function formatBytesShort(bytes) {
-    if (bytes < 1024) return `${Math.round(bytes)} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} K`;
-    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} M`;
-    return `${(bytes / 1073741824).toFixed(1)} G`;
+    return parseDiskIO(text);
 }
 
 async function readNetIO() {
     const text = await _loadFileAsync('/proc/net/dev');
-    if (!text) return {};
-
-    const lines = text.split('\n').slice(2); // skip headers
-    const interfaces = {};
-
-    for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 10) continue;
-        const name = parts[0].replace(':', '');
-        // Skip loopback, veth (docker), bridge with no traffic
-        if (name === 'lo' || name.startsWith('veth')) continue;
-        const rx = parseInt(parts[1]);
-        const tx = parseInt(parts[9]);
-        interfaces[name] = { rx, tx };
-    }
-
-    return interfaces;
-}
-
-function getNetIORate(prev, curr, intervalSec) {
-    if (!prev || !curr) return { totalRx: 0, totalTx: 0, interfaces: [] };
-
-    let totalRx = 0;
-    let totalTx = 0;
-    const interfaces = [];
-
-    for (const name of Object.keys(curr)) {
-        if (!prev[name]) continue;
-        const rxRate = (curr[name].rx - prev[name].rx) / intervalSec;
-        const txRate = (curr[name].tx - prev[name].tx) / intervalSec;
-        totalRx += rxRate;
-        totalTx += txRate;
-        interfaces.push({ name, rx: rxRate, tx: txRate });
-    }
-
-    return { totalRx, totalTx, interfaces };
+    return parseNetIO(text);
 }
 
 async function getCpuTemp() {
@@ -292,24 +163,6 @@ async function getGpuInfo(cachedNvidia) {
     return null;
 }
 
-function _parseNvidiaOutput(out) {
-    try {
-        const decoder = new TextDecoder();
-        const parts = decoder.decode(out).trim().split(',').map(s => s.trim());
-        if (parts.length < 6) return null;
-        return {
-            name: parts[5],
-            usage: parseInt(parts[0]),
-            temp: parseInt(parts[1]),
-            vramUsed: parseInt(parts[2]),
-            vramTotal: parseInt(parts[3]),
-            power: parseFloat(parts[4]),
-        };
-    } catch (_e) {
-        return null;
-    }
-}
-
 function _fetchNvidiaGpuAsync(callback) {
     try {
         const proc = Gio.Subprocess.new(
@@ -321,7 +174,7 @@ function _fetchNvidiaGpuAsync(callback) {
                 const [, stdout] = source.communicate_utf8_finish(res);
                 if (stdout) {
                     const encoder = new TextEncoder();
-                    callback(_parseNvidiaOutput(encoder.encode(stdout)));
+                    callback(parseNvidiaOutput(encoder.encode(stdout)));
                 } else {
                     callback(null);
                 }
@@ -420,14 +273,6 @@ async function readRaplEnergy() {
     return await _readIntFile('/sys/class/powercap/intel-rapl:0/energy_uj');
 }
 
-function getRaplPower(prevEnergy, currEnergy, maxRange, intervalSec) {
-    if (prevEnergy < 0 || currEnergy < 0 || intervalSec <= 0) return -1;
-    let delta = currEnergy - prevEnergy;
-    // Handle counter wraparound
-    if (delta < 0) delta += maxRange;
-    return delta / (intervalSec * 1000000); // watts
-}
-
 async function getBatteryInfo() {
     const base = '/sys/class/power_supply/BAT0';
     const capacity = await _readIntFile(`${base}/capacity`);
@@ -450,23 +295,6 @@ async function getBatteryInfo() {
     }
 
     return { capacity, status, power: powerW };
-}
-
-function formatTemp(temp) {
-    return temp >= 0 ? `${temp}\u00b0C` : 'N/A';
-}
-
-function getTempColor(temp) {
-    if (temp < 0) return '#888888';
-    if (temp < 60) return '#8ff0a4';
-    if (temp < 80) return '#f9f06b';
-    return '#ff7b63';
-}
-
-function getUsageColor(percent) {
-    if (percent < 50) return '#8ff0a4';
-    if (percent < 80) return '#f9f06b';
-    return '#ff7b63';
 }
 
 // --- Extension ---

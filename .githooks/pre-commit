@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Versioned pre-commit hook. Enabled via: git config core.hooksPath .githooks
+# Blocks the commit if the offline test suite fails.
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-commit: running System Monitor test suite…"
+exec ./run-tests.sh

@@ -1,0 +1,10 @@
+{
+  "name": "system-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling only. GNOME Shell ignores this file; it makes node treat the extension's .js files as ES modules for linting and tests.",
+  "scripts": {
+    "test": "./run-tests.sh"
+  }
+}
